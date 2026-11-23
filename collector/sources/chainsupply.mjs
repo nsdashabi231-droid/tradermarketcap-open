@@ -210,6 +210,34 @@ const METHODS = {
     }
     return { circulating: total - excluded.reduce((s, e) => s + e.amount, 0), total, src: sub, excluded };
   },
+  // Avalanche: both numbers come from the P-Chain's own API, so this is the chain's own accounting
+  // rather than an explorer's reconstruction. platform.getCurrentSupply returns the AVAX that exists
+  // (genesis 360M plus emission, minus fees burnt on the C-Chain, which Avalanche tracks in its own
+  // supply figure). platform.getTotalStake returns the bonded pool: every validator weight plus every
+  // delegator weight, which cannot be spent while the validation or delegation period runs.
+  async avalanche(r) {
+    const rpc = r.rpc || 'https://api.avax.network';
+    const post = (method) => getJSON(`${rpc}/ext/bc/P`, {
+      method: 'POST',
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: {} }),
+      headers: { 'content-type': 'application/json' },
+    });
+    const sup = await post('platform.getCurrentSupply');
+    if (sup.error) throw new Error('AVAX getCurrentSupply: ' + sup.error.message);
+    const total = Number(BigInt(sup.result.supply)) / 1e9;
+    const st = await post('platform.getTotalStake');
+    if (st.error) throw new Error('AVAX getTotalStake: ' + st.error.message);
+    const stake = Number(BigInt(st.result.stake)) / 1e9;
+    if (!(total > 4e8)) throw new Error('bad AVAX total supply ' + total);
+    if (!(stake > 0)) throw new Error('bad AVAX P-Chain stake ' + stake);
+    return {
+      circulating: total - stake,
+      total,
+      src: `${rpc}/ext/bc/P`,
+      excluded: [{ reason: 'P-Chain locked stake (active validator and delegator weight)', amount: stake, src: `${rpc}/ext/bc/P` }],
+      note: 'Total from platform.getCurrentSupply and stake from platform.getTotalStake, both on Avalanche\'s public P-Chain API.',
+    };
+  },
   // Cosmos SDK chains: bank supply of one denom, minus the community pool (and any listed treasury accounts).
   async cosmos(r) {
     const dec = 10 ** (r.decimals ?? 6);
