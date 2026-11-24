@@ -146,6 +146,23 @@ const METHODS = {
     for (let start = 0; start <= h; start += step, sub /= 2) s += (Math.min(h + 1, start + step) - start) * sub;
     return { circulating: s, total: s, src: r.src || r.heightUrl, note: `Issued by block ${h} under the ${r.schedule || 'Bitcoin'} issuance schedule` };
   },
+  // Celestia publishes both numbers itself at supply.celestia.org (run from celestiaorg/supply). The chain
+  // cannot reproduce them: a full walk of /cosmos/auth/v1beta1/accounts returns only 1,264,109 TIA of
+  // original_vesting, while the first party reports a ~188M non-circulating gap — the genesis allocations
+  // are not all vesting accounts, and a vesting account's liquid balance is not its unvested remainder.
+  // So read the first party's numbers and publish the gap as the excluded amount, with its source.
+  async 'celestia-supply'(r) {
+    const base = r.api || 'https://supply.celestia.org';
+    const circulating = Number(await getJSON(`${base}/v0/circulating-supply`));
+    const total = Number(await getJSON(`${base}/v0/total-supply`));
+    if (!(total > 0) || !(circulating > 0) || circulating > total) throw new Error('bad Celestia supply ' + circulating + '/' + total);
+    const gap = total - circulating;
+    return {
+      circulating, total, src: `${base}/v0/circulating-supply`,
+      excluded: gap > 0 ? [{ reason: 'Non-circulating allocation (unvested genesis allocation, per Celestia\'s published methodology)', amount: gap, src: `${base}/v0/total-supply` }] : [],
+      note: 'Read from Celestia\'s own supply API (celestiaorg/supply), which adjusts for locked allocations.',
+    };
+  },
   // Hyperliquid L1 reports circulating supply itself (team, foundation and future-emission balances not counted).
   async hyperliquid(r) {
     const d = await getJSON('https://api.hyperliquid.xyz/info', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'tokenDetails', tokenId: r.tokenId }) });
